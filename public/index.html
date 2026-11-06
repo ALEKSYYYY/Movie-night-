@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Movie Night</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#16162a">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+:root{--bg:#16162a;--sf:#222240;--ink:#f0eff8;--mute:#a2a1c2;--line:#34345a;--ac:#f4b13a;color-scheme:dark;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--ink);font:500 16px/1.45 system-ui,-apple-system,'Segoe UI',Roboto,sans-serif}
+main{max-width:640px;margin:0 auto;padding:18px 16px 36px}
+h1{font-size:2rem;line-height:1.05;margin:6px 0 10px;font-weight:800;letter-spacing:-.02em}
+p{margin:0 0 14px;color:var(--mute)}
+input,button{font:inherit;color:inherit}
+input[type=text]{width:100%;padding:13px 14px;border:1px solid var(--line);border-radius:12px;background:var(--sf)}
+button,.btn{display:inline-block;border:1px solid var(--line);border-radius:14px;padding:13px 16px;background:var(--sf);cursor:pointer;font-weight:700;text-align:center}
+.pri{background:var(--ac);color:#2a1a00;border-color:transparent}
+button:focus-visible,input:focus-visible{outline:3px solid var(--ac);outline-offset:2px}
+.stack{display:grid;gap:10px}
+.row{display:flex;gap:8px}
+.row>*{flex:1;min-width:0}
+video{width:100%;border-radius:18px;background:#000;max-height:60vh}
+#room{display:none}
+.top{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}
+.code{font-size:1.5rem;font-weight:800;letter-spacing:.04em}
+.st{font-size:.85rem;color:var(--mute)}
+#file{display:none}
+#log{height:150px;overflow-y:auto;border:1px solid var(--line);border-radius:16px;background:var(--sf);padding:10px 12px;margin:12px 0 8px}
+.m{margin:0 0 6px;overflow-wrap:anywhere}
+.m.s{color:var(--mute);font-size:.88rem}
+.m b{color:var(--ac)}
+</style>
+</head>
+<body>
+<main>
+<section id="joinv">
+<h1>Movie night, in sync.</h1>
+<p>Everyone picks the same movie file on their own phone. Play, pause and seeking stay in sync, and the movie never uses your data.</p>
+<div class="stack">
+<input type="text" id="nick" placeholder="Your name" maxlength="20" autocomplete="nickname">
+<input type="text" id="code" placeholder="Room code (leave empty to make one)" maxlength="12" autocapitalize="none" autocomplete="off">
+<button class="pri" id="join">Start or join room</button>
+<button id="install" hidden>Install app</button>
+</div>
+</section>
+
+<section id="room">
+<div class="top">
+<div><div class="st">Room code, share it with friends</div><div class="code" id="rc"></div></div>
+<div style="text-align:right"><div class="st" id="st"></div><div class="st" id="who"></div></div>
+</div>
+<video id="v" controls playsinline></video>
+<div class="row" style="margin-top:10px">
+<label class="btn pri" for="file">Pick the movie file</label>
+<button id="leave">Leave</button>
+</div>
+<input type="file" id="file" accept="video/*">
+<div id="log" aria-live="polite"></div>
+<div class="row">
+<input type="text" id="msg" placeholder="Say something" maxlength="300" autocomplete="off">
+<button id="send" style="flex:0 0 auto">Send</button>
+</div>
+</section>
+</main>
+
+<script>
+const $=s=>document.querySelector(s),v=$('#v'),me=Math.random().toString(36).slice(2,10);
+let room,es,nick,remote=0,info=null,dip;
+const peers=new Map();
+const clean=s=>String(s==null?'':s).replace(/[\u0000-\u001f\u200b-\u200f\u202a-\u202e\u2060\ufeff]/g,'').slice(0,300);
+
+function log(t,who){
+ const d=document.createElement('div');d.className='m'+(who?'':' s');
+ if(who){const b=document.createElement('b');b.textContent=who+' ';d.appendChild(b)}
+ d.appendChild(document.createTextNode(t));
+ const l=$('#log');l.appendChild(d);l.scrollTop=l.scrollHeight}
+const post=m=>fetch('/send?room='+room+'&id='+me,{method:'POST',body:JSON.stringify({...m,n:nick})}).catch(()=>{});
+const count=()=>{$('#who').textContent=peers.size?(peers.size+1)+' watching':'Just you'};
+const share=()=>{if(info){post({t:'file',name:info.name,dur:info.dur});post({t:'state',pos:v.currentTime,play:!v.paused})}};
+
+// Apply a friend's action without echoing it back
+function apply(pos,play){
+ remote=Date.now();
+ if(Math.abs(v.currentTime-pos)>1.5)v.currentTime=pos;
+ if(play&&v.paused)v.play().catch(()=>log('Tap play to join in.'));
+ if(!play&&!v.paused)v.pause()}
+const mine=()=>Date.now()-remote>700;
+v.onplay=()=>mine()&&post({t:'play',pos:v.currentTime});
+v.onpause=()=>mine()&&post({t:'pause',pos:v.currentTime});
+v.onseeked=()=>mine()&&post({t:'seek',pos:v.currentTime,play:!v.paused});
+v.onerror=()=>log('This file can’t play here. MP4 (H.264) works best.');
+
+function on(m){
+ if(m.from===me)return;
+ if(m.t==='leave'){const x=peers.get(m.from);if(x){peers.delete(m.from);log(x+' left')}count();return}
+ const n=clean(m.n).slice(0,20)||'Friend';
+ if(!peers.has(m.from)){peers.set(m.from,n);log(n+' joined');count();post({t:'hi'});share()}
+ const p=Number(m.pos),ok=isFinite(p)&&p>=0;
+ if(m.t==='play'&&ok)apply(p,true);
+ else if(m.t==='pause'&&ok)apply(p,false);
+ else if(m.t==='seek'&&ok)apply(p,!!m.play);
+ else if(m.t==='state'&&ok&&info)apply(p,!!m.play);
+ else if(m.t==='file'&&info&&Math.abs(Number(m.dur)-info.dur)>2)log(n+' has a different version of the movie, so sync may drift.');
+ else if(m.t==='chat')log(clean(m.x),n)}
+
+$('#file').onchange=e=>{
+ const f=e.target.files[0];if(!f)return;
+ v.src=URL.createObjectURL(f);
+ v.onloadedmetadata=()=>{info={name:clean(f.name).slice(0,80),dur:v.duration};log('Loaded '+info.name);share()}};
+
+$('#join').onclick=()=>{
+ nick=clean($('#nick').value).trim().slice(0,20)||'Friend';
+ room=($('#code').value||Math.random().toString(36).slice(2,7)).toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,12);
+ try{localStorage.setItem('nick',nick)}catch(e){}
+ es=new EventSource('/events?room='+room+'&id='+me);
+ es.onmessage=e=>{try{on(JSON.parse(e.data))}catch(x){}};
+ es.onopen=()=>{$('#st').textContent='Connected';post({t:'hi'})};
+ es.onerror=()=>{$('#st').textContent='Reconnecting…'};
+ $('#rc').textContent=room;$('#joinv').style.display='none';$('#room').style.display='block';count();
+ log('Pick the same movie file as your friends, then press play.')};
+
+$('#leave').onclick=()=>{if(es)es.close();location.reload()};
+const chat=()=>{const t=clean($('#msg').value).trim();if(!t)return;post({t:'chat',x:t});log(t,'You');$('#msg').value=''};
+$('#send').onclick=chat;
+$('#msg').addEventListener('keydown',e=>{if(e.key==='Enter')chat()});
+
+addEventListener('beforeinstallprompt',e=>{e.preventDefault();dip=e;$('#install').hidden=false});
+$('#install').onclick=()=>{if(dip){dip.prompt();dip=null;$('#install').hidden=true}};
+if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+try{$('#nick').value=localStorage.getItem('nick')||''}catch(e){}
+$('#code').value=(location.hash||'').slice(1).toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,12);
+</script>
+</body>
+</html>
